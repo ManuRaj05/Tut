@@ -13,6 +13,7 @@ import json
 from rest_framework.permissions import IsAuthenticated
 from users.authentication import JWTAuthentication
 from .services.ai_utility import generate_question_with_testcases
+from .services.json_utils import clean_json_blocks
 
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 
@@ -172,17 +173,33 @@ Steps:
     
     try:
         reply = groq_service.generate_content(full_prompt)
+        print(f"DEBUG: Raw LLM Reply: {reply[:500]}...") # Log first 500 chars
         
         # CLEANUP: Remove <think>...</think> blocks from reasoning models
         cleaned_reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL | re.IGNORECASE).strip()
         
-        # Ensure we only return the HTML part if there's extra chatter
-        # Simple heuristic: find first <!DOCTYPE and last </html>
-        match = re.search(r'(<!DOCTYPE html>.*</html>)', cleaned_reply, re.DOTALL | re.IGNORECASE)
-        if match:
-            cleaned_reply = match.group(1)
+        # --- ROBUST EXTRACTION ---
+        # 1. Try to find <!DOCTYPE html>...</html>
+        match_doctype = re.search(r'(<!DOCTYPE html>.*</html>)', cleaned_reply, re.DOTALL | re.IGNORECASE)
+        # 2. Try to find <html>...</html>
+        match_html = re.search(r'(<html.*</html>)', cleaned_reply, re.DOTALL | re.IGNORECASE)
+        
+        if match_doctype:
+            cleaned_reply = match_doctype.group(1)
+        elif match_html:
+            cleaned_reply = match_html.group(1)
+        else:
+            # 3. Fallback: If it's wrapped in markdown code blocks, strip them
+            if "```html" in cleaned_reply:
+                cleaned_reply = cleaned_reply.split("```html")[1].split("```")[0].strip()
+            elif "```" in cleaned_reply:
+                cleaned_reply = cleaned_reply.split("```")[1].split("```")[0].strip()
             
-        print("Visualization Generated")
+        # Final safety: If extraction failed but we have a reply, just send the cleaned reply
+        if not cleaned_reply.strip() and reply.strip():
+            cleaned_reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        print(f"Visualization Generated (Length: {len(cleaned_reply)})")
         return Response({"visualization": cleaned_reply})
     except Exception as e:
         print(f"Error generating visualization: {e}")
@@ -195,7 +212,6 @@ from rest_framework.permissions import AllowAny
 from mongoengine import connect
 from django.conf import settings
 from .services.agent_service import process_user_query
-
 
 class CodeAgentView(APIView):
     permission_classes = [IsAuthenticated]
@@ -210,8 +226,83 @@ class CodeAgentView(APIView):
             print("Agent result:", result)
             return Response(result)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response({"error": str(e)}, status=500)
 
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def generate_agent_code_challenge(request):
+    """
+    Dedicated endpoint for the AgentCode feature.
+    Bypasses intent routing and directly calls the 3-question structured batch generator.
+    """
+    topic = request.data.get("topic")
+    if not topic:
+        return Response({"error": "Missing topic"}, status=400)
+        
+    try:
+        from .services.agent_service import generate_structured_batch_tool
+        from .models import QuestionB, TestCase, CodingStep
+        
+        user = request.user
+        print(f"Generating dedicated AgentCode challenge for topic: {topic}")
+        questions_data = generate_structured_batch_tool(topic)
+        
+        saved_questions = []
+        for qdata in questions_data:
+            testcases_data = qdata.get("testcases", [])
+            if isinstance(testcases_data, str):
+                try:
+                   testcases_data = json.loads(testcases_data)
+                except:
+                   testcases_data = []
+
+            testcases = []
+            for tc in testcases_data:
+                 inp = tc.get("input_data") or tc.get("input") or ""
+                 out = tc.get("expected_output") or tc.get("expected") or ""
+                 testcases.append(TestCase(input_data=str(inp), expected_output=str(out)))
+            
+            # --- GUIDED STEPS ---
+            steps_data = qdata.get("steps", [])
+            steps = []
+            for sd in steps_data:
+                steps.append(CodingStep(
+                    title=sd.get("title", "Progression"),
+                    instruction=sd.get("instruction", ""),
+                    hint=sd.get("hint", ""),
+                    target_logic=sd.get("target_logic", "")
+                ))
+
+            qdoc = QuestionB(
+                user=user,
+                topic=topic,
+                title=qdata.get("title", "Practice Question"),
+                description=qdata.get("description", "No description"),
+                difficulty=qdata.get("difficulty", "medium"),
+                testcases=testcases,
+                steps=steps
+            )
+            qdoc.save()
+            
+            # Ensure qdata sent back contains the steps for frontend state
+            qdata["steps"] = steps_data
+            saved_questions.append(qdata)
+            
+        print(f"Successfully generated {len(saved_questions)} questions.")
+        print("Generated Questions:", saved_questions)
+        return Response({
+            "type": "plan", 
+            "questions": saved_questions, 
+            "topic": topic
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
@@ -335,47 +426,122 @@ def ai_assist(request):
     prompt = request.data.get("prompt", "")
     code_context = request.data.get("code", "")
     history = request.data.get("history", [])
+    mode = request.data.get("mode", "chat") # "chat" or "review"
+    current_step = request.data.get("current_step") # {title, instruction, target_logic}
     
-    if not prompt:
+    if not prompt and mode == "chat":
         return Response({"error": "Prompt is required"}, status=400)
         
-    system_prompt = f"""
-    You are an expert Python Coding Tutor.
-    The user is working on a coding problem.
-    
-    Current Code:
-    ```python
-    {code_context}
-    ```
-    
-    Provide a helpful, pedagogical response. 
-    - If the user asks for a hint, give a hint without revealing the full solution.
-    - If the user asks for debugging help, explain the error.
-    - Don't give full steps predict the next step he has to perform with his code and say the logic won't work if it don't and explain
-    - Be concise and encouraging.
-    dont output more than 500 words
-    """
+    if mode == "review":
+        system_prompt = f"""
+        You are a strict Python Coding Coach. 
+        Your task is to REVIEW the user's current code against the MISSION STEP logic.
+        
+        MISSION STEP:
+        Title: {current_step.get('title')}
+        Instruction: {current_step.get('instruction')}
+        Target Logic (What must be present): {current_step.get('target_logic')}
+        
+        CURRENT CODE:
+        ```python
+        {code_context}
+        ```
+        
+        OUTPUT FORMAT:
+        Return JSON ONLY:
+        {{
+            "passed": boolean,
+            "feedback": "If passed: Praise and explain why it's good. If failed: Explain what is missing without giving full code.",
+            "next_instruction": "The instruction for the NEXT step if passed, else repeat current."
+        }}
+        """
+    else:
+        system_prompt = f"""
+        You are an expert Python Coding Tutor.
+        The user is working on a coding problem.
+        
+        Current Code:
+        ```python
+        {code_context}
+        ```
+        
+        GUIDELINE:
+        - If the user asks for a hint, provide a "Hidden Hint" using the tag [REVEAL]...[/REVEAL].
+          Example: "Try using the range() function. [REVEAL]for i in range(len(arr)):[/REVEAL]"
+        - Predict the next step he has to perform with his code.
+        - Be concise. Don't output more than 300 words.
+        """
     
     try:
         # Build messages list
         messages = [{"role": "system", "content": system_prompt}]
         
-        # Add history
         for msg in history:
             role = msg.get("role")
             content = msg.get("content")
             if role in ["user", "assistant"] and content:
                 messages.append({"role": role, "content": content})
                 
-        # Add current prompt
-        messages.append({"role": "user", "content": prompt})
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        elif mode == "review":
+            messages.append({"role": "user", "content": "Review my progress for this step."})
 
         reply = groq_service.chat(messages)
         
-        # CLEANUP: Remove <think>...</think> blocks
         if reply:
             reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL | re.IGNORECASE).strip()
             
+        if mode == "review":
+            review_data = clean_json_blocks(reply)
+            
+            if review_data:
+                # Normalize keys to lowercase for consistent frontend handling
+                normalized = {str(k).lower(): v for k, v in review_data.items()}
+                passed = normalized.get("passed", False)
+                feedback = normalized.get("feedback", normalized.get("comment", "Review completed."))
+                
+                # RECORD MISTAKE IF FAILED
+                if not passed:
+                    from chatbot.services.mistake_service import mistake_service
+                    topic_label = current_step.get('title') if current_step else "Coding Challenge"
+                    mistake_service.record_mistake(request.user.email, topic_label, feedback, "code")
+
+                return Response({
+                    "passed": passed,
+                    "feedback": feedback,
+                    "next_instruction": normalized.get("next_instruction", normalized.get("instruction", "Proceed to next step."))
+                })
+            else:
+                # Fallback if AI didn't return valid JSON
+                return Response({
+                    "passed": False, 
+                    "feedback": reply,
+                    "next_instruction": "Please fix the current step and try again."
+                })
+
         return Response({"reply": reply})
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def get_user_mistakes(request):
+    """
+    Returns the qualitative mistake log for the dashboard.
+    """
+    try:
+        from chatbot.services.mistake_service import mistake_service
+        mistakes = mistake_service.get_recent_mistakes(request.user.email, limit=10)
+        data = []
+        for m in mistakes:
+            data.append({
+                "topic": m.topic,
+                "mistake": m.mistake_description,
+                "source": m.source,
+                "created_at": m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "Unknown"
+            })
+        return Response(data)
     except Exception as e:
         return Response({"error": str(e)}, status=500)

@@ -7,6 +7,7 @@ from typing import Dict, Any
 # from langchain.agents import initialize_agent, Tool, AgentType (REMOVED)
 # from langchain.memory import ConversationBufferMemory (REMOVED)
 from chatbot.services.groq_service import GroqService
+from chatbot.services.context_service import context_service
 from Code.models import QuestionB, Plan, TestCase
 
 # Initialize Groq model
@@ -15,51 +16,7 @@ groq = GroqService()
 # ─────────────────────────────
 # TOOL 1: Intent classification
 # ─────────────────────────────
-# Helper for robust JSON extraction
-def clean_json_blocks(text):
-    if not text:
-        return None
-    text = text.strip()
-    
-    # 1. Remove <think> blocks
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-    # 2. Try direct parse first (if it looks like JSON)
-    if text.startswith("{") or text.startswith("["):
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-    # 3. Regex search for generic JSON object/array (greedy match)
-    # captures from first { to last }
-    match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
-    if match:
-        candidate = match.group(1)
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-
-    # 4. Fallback to code block extraction (only if regex failed)
-    if "```json" in text:
-        try:
-             candidate = text.split("```json")[1].split("```")[0].strip()
-             return json.loads(candidate)
-        except:
-             pass
-    elif "```" in text:
-        try:
-             candidate = text.split("```")[1].split("```")[0].strip()
-             return json.loads(candidate)
-        except:
-             pass
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        print(f"JSON Parse Error: {text}")
-        return None
+from .json_utils import clean_json_blocks
 
 # ─────────────────────────────
 # TOOL 1: Intent classification
@@ -90,22 +47,34 @@ def decide_intent_tool(user_query: str) -> Dict[str, Any]:
 # ─────────────────────────────
 # TOOL 2: Question generator
 # ─────────────────────────────
-def generate_question_tool(topic: str, difficulty: str = "medium") -> Dict[str, Any]:
+def generate_question_tool(topic: str, difficulty: str = "medium", mastery_context: str = "") -> Dict[str, Any]:
     prompt = f"""
     Generate a {difficulty} coding question about "{topic}".
     
-    The question should strictly follow this difficulty level:
+    USER MASTERY CONTEXT:
+    {mastery_context}
+    
+    Calibration Instructions:
+    - Use the Mastery Context to calibrate the question's difficulty.
+    - If a user is weak in a specific prerequisite, provide simpler explanations or hints in the description.
+    - Bridge the new topic with concepts the user has already mastered.
     - Easy: Basic syntax, loops, inbuilt functions allowed unless specified otherwise.
     - Medium: Logic building, standard algorithms, optimal time complexity.
     - Hard: Advanced algorithms, edge cases, strict constraints.
 
     Return ONLY strict JSON with keys: 
     - "title": Short title.
-    - "description": Detailed problem statement in Markdown. Include Input/Output format, constraints, and Examples.
+    - "description": Detailed problem statement in Markdown. Include Input/Output format, constraints, and Examples. Do NOT use LaTeX math formatting (like \le) as it breaks JSON escaping.
     - "difficulty": "{difficulty}" (ensure this matches).
     - "testcases": List of objects with "input_data" and "expected_output" (strings).
+    
+    IMPORTANT: 
+    - Return ONLY the raw JSON string. 
+    - Do NOT use Markdown formatting (no ```json blocks). 
+    - Ensure valid JSON syntax (escape all internal quotes and backslashes).
     """
     resp = groq.generate_content(prompt)
+    print(f"DEBUG: Raw AgentCode Question Reply: {resp[:500]}...")
     data = clean_json_blocks(resp)
     
     if data:
@@ -118,7 +87,7 @@ def generate_question_tool(topic: str, difficulty: str = "medium") -> Dict[str, 
 # ─────────────────────────────
 # TOOL 3: Plan generator
 # ─────────────────────────────
-def create_plan_tool(topic: str, intent: str, count: int, company:str) -> Dict[str, Any]:
+def create_plan_tool(topic: str, intent: str, count: int, company:str, mastery_context: str = "") -> Dict[str, Any]:
     """
     Generate a learning plan with N question titles or descriptions.
     """
@@ -128,6 +97,9 @@ def create_plan_tool(topic: str, intent: str, count: int, company:str) -> Dict[s
         You are an expert Data Structures & Algorithms curriculum designer.
 
 Your task is to generate a step-by-step coding practice plan for the topic: "{topic}".
+
+USER MASTERY CONTEXT:
+{mastery_context}
 
 CORE TEACHING PRINCIPLE:
 - The plan must progress naturally from absolute basics to interview-level mastery.
@@ -194,48 +166,74 @@ Return ONLY a valid JSON object in the following format:
 # ─────────────────────────────
 # TOOL 2b: Structured Batch Generator (User Request)
 # ─────────────────────────────
-def generate_structured_batch_tool(topic: str) -> list:
+def generate_structured_batch_tool(topic: str, mastery_context: str = "") -> list:
     """
-    Generates exactly 3 structured questions as requested.
+    Generates exactly 5 structured questions as requested.
     """
     prompt = f"""
-    Generate exactly three coding questions for the topic "{topic}" such that:
-
-    Question 1 – Structural Application
-    Requires the learner to implement the core abstraction or mechanism of {topic} from first principles.
-    Must include edge cases or constraints that force correct conceptual understanding.
-
-    Question 2 – Constraint-Driven Selection
-    Presents a practical problem where {topic} is the natural solution due to its defining property.
-    The learner must choose and use the topic intentionally (not by instruction).
-    The question must let him understand why.
-
-    Question 3 – Conceptual Transfer
-    Requires using the key property of {topic} to solve a different but related problem.
-    Avoid trivial repetition of Question 2.
+    Generate exactly 5 coding questions for the topic "{topic}" such that:
+    
+    USER MASTERY CONTEXT:
+    {mastery_context}
+    
+    first question should be how to implement it from scratch [Example how to declare a list]
+    and follow up questions must add the concept learned with one extra concept like wise generate 5 question where the user is a very first beginner
+    
 
     OUTPUT FORMAT:
-    Return a JSON object with a key "questions" containing a list of 3 question objects.
+    Return a JSON object with a key "questions" containing a list of 5 question objects.
     Each question object must follow this schema:
     {{
         "title": "Short Title",
-        "description": "Full problem description...",
+        "description": "Full problem description. Do NOT use LaTeX math formatting.",
         "difficulty": "medium",
-        "testcases": [ {{"input_data": "...", "expected_output": "..."}} ]
+        "testcases": [ {{"input_data": "...", "expected_output": "..."}} ],
+        "steps": [
+            {{
+                "title": "Step 1 Title",
+                "instruction": "Specific instruction for what the user should code now (e.g. 'Define the function header and initialize left/right pointers').",
+                "hint": "A helpful tip if they get stuck.",
+                "target_logic": "Explain what code patterns should be present (e.g. 'def func(arr):, left=0, right=len(arr)-1')"
+            }}
+        ]
     }}
-    """
-    resp = groq.generate_content(prompt)
-    data = clean_json_blocks(resp)
     
+    IMPORTANT: 
+    - Provide EXACTLY 3 questions (Easy, Medium, Hard).
+    - Provide 2-4 implementation steps per question.
+    - Keep descriptions and instructions CONCISE (max 1-2 sentences) to avoid truncation.
+    - Return ONLY the raw JSON string. 
+    - Do NOT use Markdown formatting (no ```json blocks). 
+    - Ensure valid JSON syntax.
+    """
+    resp = groq.generate_content(prompt, max_tokens=4096)
+    print(f"DEBUG: Raw AgentCode Batch Reply: {resp[:500]}...")
+    data = clean_json_blocks(resp)
+    print(resp,data)
     if data and "questions" in data:
         return data["questions"]
         
     # Fallback if parsing fails
     print(f"Batch generation failed, falling back. Resp: {resp}")
     return [
-        {"title": f"{topic} (Structural)", "description": "Implement core concepts.", "difficulty": "medium", "testcases": []},
-        {"title": f"{topic} (Selection)", "description": "Apply in practical scenario.", "difficulty": "medium", "testcases": []},
-        {"title": f"{topic} (Transfer)", "description": "Solve related problem.", "difficulty": "hard", "testcases": []}
+        {
+            "title": f"{topic} (Structural)", 
+            "description": "Implement core concepts. (Auto-generated fallback due to AI error)", 
+            "difficulty": "easy", 
+            "testcases": [{"input_data": "Example Input", "expected_output": "Example Output"}]
+        },
+        {
+            "title": f"{topic} (Selection)", 
+            "description": "Apply in practical scenario. (Auto-generated fallback)", 
+            "difficulty": "medium", 
+            "testcases": [{"input_data": "Example Input", "expected_output": "Example Output"}]
+        },
+        {
+            "title": f"{topic} (Transfer)", 
+            "description": "Solve related problem. (Auto-generated fallback)", 
+            "difficulty": "hard", 
+            "testcases": [{"input_data": "Example Input", "expected_output": "Example Output"}]
+        }
     ]
 
 # ─────────────────────────────
@@ -245,6 +243,9 @@ def process_user_query(user_query: str, user):
     """
     Handles full logic — one entry point for the Django view.
     """
+    # ✨ Mastery Awareness
+    mastery_context = context_service.get_mastery_context(user.email)
+    
     # 1️⃣ Decide intent
     intent_info = decide_intent_tool(user_query)
     print("Intent decided:", intent_info)
@@ -329,16 +330,18 @@ def process_user_query(user_query: str, user):
         questions_data = generate_structured_batch_tool(topic)
         
         saved_questions = []
-        
+        print(352,saved_questions)
         for qdata in questions_data:
+            print(354,qdata)
             testcases_data = qdata.get("testcases", [])
             if isinstance(testcases_data, str):
                 try:
                    testcases_data = json.loads(testcases_data)
                 except:
                    testcases_data = []
-
+            
             testcases = []
+            print(361,testcases_data)
             for tc in testcases_data:
                  inp = tc.get("input_data") or tc.get("input") or ""
                  out = tc.get("expected_output") or tc.get("expected") or ""
@@ -355,21 +358,17 @@ def process_user_query(user_query: str, user):
             qdoc.save()
             saved_questions.append(qdata)
             
-        # Return as "plan" type so views.py handles a list, OR as valid single if frontend expects it
-        # But since we generated 3, returning them as a list under "questions" is safest if views.py logic supports it.
-        # Code/views.py logic:
-        # if type == "single": takes "question" dict
-        # if type == "plan": takes "questions" list
+        
         
         return {"type": "plan", "questions": saved_questions, "topic": topic}
 
 
-def generate_question_for_step(main_topic, step_data):
+def generate_question_for_step(main_topic, step_data, mastery_context=""):
     """
     Helper to generate a specific question from a plan step.
     """
     step_topic = f"{main_topic}: {step_data.get('title')}"
-    qdata = generate_question_tool(step_topic, step_data.get("difficulty", "medium"))
+    qdata = generate_question_tool(step_topic, step_data.get("difficulty", "medium"), mastery_context=mastery_context)
     
     # Normalize testcases
     testcases_data = qdata.get("testcases", [])

@@ -16,7 +16,7 @@ class GroqService:
             
         self.client = Groq(api_key=self.api_key)
 
-    def chat(self, messages, temperature=0.7):
+    def chat(self, messages, temperature=0.7, max_tokens=4096):
         """
         Standard chat completion.
         messages = [{"role": "user", "content": "..."}]
@@ -26,14 +26,15 @@ class GroqService:
                 messages=messages,
                 model=self.model,
                 temperature=temperature,
+                max_tokens=max_tokens,
             )
             return completion.choices[0].message.content
         except Exception as e:
             print(f"Groq API Error: {e}")
             raise e
 
-    def generate_content(self, prompt: str) -> str:
+    def generate_content(self, prompt: str, max_tokens=4096) -> str:
         """
         Simple text generation, mimicking some of the genai behavior for easy refactoring.
         """
-        return self.chat([{"role": "user", "content": prompt}])
+        return self.chat([{"role": "user", "content": prompt}], max_tokens=max_tokens)

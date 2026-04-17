@@ -24,6 +24,11 @@ class TestCase(EmbeddedDocument):
     expected_output = StringField()
     visibility = StringField(choices=["public", "hidden"], default="public")
 
+class CodingStep(EmbeddedDocument):
+    title = StringField()
+    instruction = StringField()
+    hint = StringField()
+    target_logic = StringField() # Hidden description of what logic must be in the code
 
 class QuestionB(Document):
     user = ReferenceField(User, required=True)
@@ -32,6 +37,7 @@ class QuestionB(Document):
     description = StringField()
     difficulty = StringField()
     testcases = ListField(EmbeddedDocumentField(TestCase))
+    steps = ListField(EmbeddedDocumentField(CodingStep)) # New field for guidance
     created_at = DateTimeField(default=datetime.datetime.utcnow)
 
 class Plan(Document):
@@ -48,3 +54,14 @@ class Plan(Document):
         'indexes': ['user', 'topic']
     }
 
+class UserMistake(Document):
+    user_email = StringField(required=True)
+    topic = StringField(required=True)
+    mistake_description = StringField()
+    source = StringField() # "tutor", "code", "debug"
+    created_at = DateTimeField(default=datetime.datetime.utcnow)
+
+    meta = {
+        'collection': 'user_mistakes',
+        'indexes': ['user_email', 'topic']
+    }

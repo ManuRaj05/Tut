@@ -8,6 +8,7 @@ import re
 from .groq_service import GroqService
 from .rl_selector import RLSelector
 from .gkt_model import GKTModel
+from .context_service import context_service
 
 # Configure Groq
 # genai.configure... (REMOVED)
@@ -50,31 +51,34 @@ def clean_json_response(text):
         return json.loads(text)
     except json.JSONDecodeError:
         print(f"JSON Parse Error: {text}")
-        return None
+        return {"intent": "DOUBT", "reply": text}
 
-def generate_subtopics_python(topic, **kwargs):
+def generate_subtopics_python(topic, user=None, **kwargs):
+    mastery_context = ""
+    if user:
+        mastery_context = context_service.get_mastery_context(user.email)
+        
     prompt = f"""
     You are an expert Computer Science Curriculum Designer for strictly python.
     Create a highly structured, emoji-rich learning roadmap for "{topic}".
     
+    USER MASTERY CONTEXT:
+    {mastery_context}
+    
     Structure the roadmap into Levels (Level 1, Level 2, etc.) progressing for Beginner.
+    If the user has already mastered parts of this topic, mark those levels as "✨ REVISION" and focus the roadmap on the "🔥 NEW MASTERY" areas.
     
     Output strictly a JSON object with two keys:
     1. "roadmap_md": A string containing the beautiful Markdown representation.
-       - Use headers "🟢 {topic} COMPLETE ROADMAP".
-       - Use "Level X - Title" format.
-       - Use bullet points with formatting.
-       - Mark important concepts with "🔥".
+       - Use headers "🎯 MODULE: {topic}".
+       - Structure into clear "Levels" of progression (Beginner -> Advanced).
+       - Each Level should have 2-3 specific sub-tasks.
+       - Use specific technical terms, not generic "basics".
+       - Mark important milestones with "🔥".
     
-    2. "steps": A flat list of strings representing the granular individual lessons to teach.
-       - Each string should correspond to a sub-bullet in your roadmap.
-       - This list will be used by the teaching bot to iterate 1-by-1.
-       
-    Example Output Format:
-    {{
-      "roadmap_md": "🟢 STACK ROADMAP\\n\\nLevel 1 - Basics\\n* Definition\\n* LIFO Principle...",
-      "steps": ["Stack Definition", "LIFO Principle", "Push/Pop Operations", ...]
-    }}
+    2. "steps": A flat list of strings representing the granular individual lessons.
+       - These MUST correspond to the sub-bullets in the roadmap.
+       - Be specific: "Nested If-Else" instead of just "If statements".
     """
     if kwargs.get('is_revision'):
         prompt = f"""
@@ -132,7 +136,7 @@ def teach_content(subtopic, style="Socratic"):
     
     STRUCTURE:
     1. **Explanation**: Explain the concept clearly using metaphors, code examples, and humor.
-    2. **Check for Understanding**: End with **EXACTLY ONE** specific question to check if the user understood. Do NOT ask multiple questions.
+    2. **Check for Understanding**: End with **EXACTLY ONE** specific theoretical question to check if the user understood. Do NOT ask multiple questions.
     
     OUTPUT FORMAT:
     Please provide the response in two clearly marked blocks. Do not use JSON.
@@ -142,6 +146,8 @@ def teach_content(subtopic, style="Socratic"):
     
     (Your single follow-up question here)
     [/CONTENT]
+    
+    [VISUALIZATION]
     
     [VISUALIZATION]
      You are a specialized Visualization Code Generator.
@@ -206,28 +212,40 @@ Steps:
     if not response_text:
         return {"content": f"I apologize, I'm having trouble retrieving the lesson for **{subtopic}** right now. Could we try again?", "visualization": None}
 
+    print(f"DEBUG: Raw Tutor Lesson Reply: {response_text[:500]}...")
+
     # Parse Blocks using Regex
-    content_match = re.search(r'\[CONTENT\](.*?)\[/CONTENT\]', response_text, re.DOTALL)
-    viz_match = re.search(r'\[VISUALIZATION\](.*?)\[/VISUALIZATION\]', response_text, re.DOTALL)
+    content_match = re.search(r'\[CONTENT\](.*?)(\[/CONTENT\]|\[VISUALIZATION\]|$)', response_text, re.DOTALL | re.IGNORECASE)
+    viz_match = re.search(r'\[VISUALIZATION\](.*?)(\[/VISUALIZATION\]|$)', response_text, re.DOTALL | re.IGNORECASE)
     
     content = content_match.group(1).strip() if content_match else response_text
-    visualization = viz_match.group(1).strip() if viz_match else None
+    visualization_raw = viz_match.group(1).strip() if viz_match else None
     
-    # Validation: If content effectively empty, use fallback
-    if len(content) < 10:
-        content = f"**{subtopic}**\n\nLet's get started. What do you already know about this?"
+    # Robust HTML Extraction
+    visualization = None
+    if visualization_raw:
+        # CLEANUP: Remove <think> blocks
+        visualization_raw = re.sub(r'<think>.*?</think>', '', visualization_raw, flags=re.DOTALL | re.IGNORECASE).strip()
 
-    # Generic cleanup for empty viz
-    if visualization and len(visualization) < 20: 
-        visualization = None
+        match_doctype = re.search(r'(<!DOCTYPE html>.*</html>)', visualization_raw, re.DOTALL | re.IGNORECASE)
+        match_html = re.search(r'(<html.*</html>)', visualization_raw, re.DOTALL | re.IGNORECASE)
         
-    # Remove any markdown code blocks from viz if present (e.g. ```html ... ```)
-    if visualization:
-        visualization = re.sub(r'^```html\s*', '', visualization)
-        visualization = re.sub(r'^```\s*', '', visualization)
-        visualization = re.sub(r'\s*```$', '', visualization)
+        if match_doctype:
+            visualization = match_doctype.group(1)
+        elif match_html:
+            visualization = match_html.group(1)
+        else:
+            if "```html" in visualization_raw:
+                visualization = visualization_raw.split("```html")[1].split("```")[0].strip()
+            elif "```" in visualization_raw:
+                visualization = visualization_raw.split("```")[1].split("```")[0].strip()
+            else:
+                visualization = visualization_raw
+
+    return {"content": content, "visualization": visualization, "coding_task": None}
     
-    return {"content": content, "visualization": visualization}
+    return {"content": content, "visualization": visualization, "coding_task": None}
+
 
 def regenerate_visualization(topic):
     """
@@ -270,28 +288,56 @@ def regenerate_visualization(topic):
     [/VISUALIZATION]
     """
     response_text = groq_service.generate_content(prompt)
+    print(f"DEBUG: Raw Tutor Regenerate Reply: {response_text[:500]}...")
     
-    viz_match = re.search(r'\[VISUALIZATION\](.*?)\[/VISUALIZATION\]', response_text, re.DOTALL)
-    visualization = viz_match.group(1).strip() if viz_match else None
+    viz_match = re.search(r'\[VISUALIZATION\](.*?)(\[/VISUALIZATION\]|$)', response_text, re.DOTALL | re.IGNORECASE)
+    visualization_raw = viz_match.group(1).strip() if viz_match else response_text
     
-    if visualization:
-        visualization = re.sub(r'^```html\s*', '', visualization)
-        visualization = re.sub(r'^```\s*', '', visualization)
-        visualization = re.sub(r'\s*```$', '', visualization)
+    visualization = None
+    if visualization_raw:
+        # CLEANUP: Remove <think> blocks
+        visualization_raw = re.sub(r'<think>.*?</think>', '', visualization_raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        match_doctype = re.search(r'(<!DOCTYPE html>.*</html>)', visualization_raw, re.DOTALL | re.IGNORECASE)
+        match_html = re.search(r'(<html.*</html>)', visualization_raw, re.DOTALL | re.IGNORECASE)
         
+        if match_doctype:
+            visualization = match_doctype.group(1)
+        elif match_html:
+            visualization = match_html.group(1)
+        else:
+            if "```html" in visualization_raw:
+                visualization = visualization_raw.split("```html")[1].split("```")[0].strip()
+            elif "```" in visualization_raw:
+                visualization = visualization_raw.split("```")[1].split("```")[0].strip()
+            else:
+                visualization = visualization_raw
+            
+    return visualization
+            
     return visualization
 
-def analyze_input(user_input, current_topic, current_subtopic, last_bot_question=None):
+def analyze_input(user, user_input, current_topic, current_subtopic, last_bot_question=None):
     """
     Determine if input is:
     1. ANSWER (to the teaching question)
     2. DOUBT (question about current topic)
     3. SWITCH (request to change topic)
     """
-    prompt = f"""
-    Context: Python Tutoring.
-    Topic: {current_topic}, Subtopic: {current_subtopic}
-    Last Bot Message should have asked a question.
+    # Fetch Mastery Context
+    from .context_service import context_service
+    mastery_context = context_service.get_mastery_context(user.email)
+    
+    system_prompt = f"""
+    You are an enthusiastic AI Tutor teaching "{current_topic}".
+    Current Step: {current_subtopic}
+    
+    USER MASTERY PROFILE:
+    {mastery_context}
+
+    Your goal is to explain concepts clearly. 
+    If a concept is marked with a high score in the profile, use it as a reference for analogy. 
+    If a concept is weak, break it down into smaller parts.
     User User Input: "{user_input}"
 
     Classify the user intent:
@@ -309,7 +355,7 @@ def analyze_input(user_input, current_topic, current_subtopic, last_bot_question
       "reply": "If correct ANSWER: say 'Correct!' and brief check. If incorrect ANSWER: explain why. If DOUBT: answer it clearly."
     }}
     """
-    return clean_json_response(groq_service.generate_content(prompt))
+    return clean_json_response(groq_service.generate_content(system_prompt))
     
 def start_new_topic(user, topic, is_revision=False):
     """
@@ -317,28 +363,28 @@ def start_new_topic(user, topic, is_revision=False):
     Used by Main Agent Orchestrator to sync state.
     """
     session = get_or_create_session(user)
-    session.current_topic = topic
     
-    # Generate Rich Roadmap
-    # Generate Rich Roadmap (Visual Only)
-    roadmap_md, _ = generate_subtopics_python(topic, is_revision=is_revision)
-    
-    # DYNAMIC INIT: Consultant the GAT BRAIN first
+    # 1. Consult the GAT BRAIN for the starting point
     next_step = recommendation_service.get_next_best_step(user.email, topic)
     
-    if next_step:
-        # GAT found a specific starting point
-        session.subtopics = [next_step]
-        roadmap_msg = f"Welcome! 🧠 **Knowledge Graph Analysis Complete**.\n\nBased on your mastery profile, the best starting point for **{topic}** is:\n\n# 🚀 **{next_step}**\n\nThe AI predicts you are **100% Ready** for this concept.\n\nShall we start?"
+    # FIX: Respect User Intent. The curriculum MUST be for the requested topic.
+    # We use next_step only to highlight where to start WITHIN that topic.
+    active_topic = topic
+    session.current_topic = active_topic
+    
+    # 2. Generate Focused Roadmap for the requested topic
+    roadmap_md, steps = generate_subtopics_python(active_topic, user=user, is_revision=is_revision)
+    session.subtopics = steps
+    
+    if next_step and next_step != topic:
+        roadmap_msg = f"Welcome! 🧠 **Knowledge Graph Analysis Complete**.\n\nBased on your mastery profile, the best starting point for **{topic}** is:\n\n# 🚀 **{next_step}**\n\nI've generated your customized curriculum for **{topic}** below. Shall we start?"
+        roadmap_msg += f"\n\n{roadmap_md}"
     else:
-        # Fallback (Graph empty or topic unknown) -> Use LLM
-        roadmap_md, steps = generate_subtopics_python(topic, is_revision=is_revision)
-        session.subtopics = steps
         roadmap_msg = f"{roadmap_md}\n\n**Shall we proceed with this roadmap?**"
 
     session.current_index = -1 
     session.status = "AWAITING_PLAN_APPROVAL"
-    session.switch_topic_buffer = None # Clear any pending switches
+    session.switch_topic_buffer = None
     session.save()
     
     return {
@@ -412,6 +458,7 @@ def handle_persistent_chat(user, message):
             teaching_data = teach_content(session.subtopics[0], style=style)
             content = teaching_data.get("content", "")
             visualization = teaching_data.get("visualization")
+            coding_task = teaching_data.get("coding_task")
             
             # --- EXTRACT QUESTION FROM CONTENT ---
             # We assume the prompt "End with EXACTLY ONE specific question" logic works.
@@ -424,6 +471,7 @@ def handle_persistent_chat(user, message):
             return {
                 "reply": f"Great! Let's start with **{session.subtopics[0]}**.\n\n{content}", 
                 "visualization": visualization,
+                "coding_task": coding_task,
                 "awaiting_reply": True, 
                 "is_complete": False
             }
@@ -464,14 +512,16 @@ def handle_persistent_chat(user, message):
         # DYNAMIC INIT: Consultant the GAT BRAIN first
         next_step = recommendation_service.get_next_best_step(user.email, topic)
         
+        roadmap_md, steps = generate_subtopics_python(topic)
+        session.subtopics = steps
+        
         if next_step:
-            # GAT found a specific starting point
-            session.subtopics = [next_step]
-            roadmap_msg = f"Welcome! 🧠 **Knowledge Graph Analysis Complete**.\n\nBased on your mastery profile, the best starting point for **{topic}** is:\n\n# 🚀 **{next_step}**\n\nThe AI predicts you are **100% Ready** for this concept.\n\nShall we start?"
+            # GAT found a specific starting point. Prepend it if not already generated.
+            if next_step not in session.subtopics:
+                session.subtopics.insert(0, next_step)
+            roadmap_msg = f"Welcome! 🧠 **Knowledge Graph Analysis Complete**.\n\nBased on your mastery profile, the best starting point for **{topic}** is:\n\n# 🚀 **{next_step}**\n\nThe AI predicts you are **100% Ready** for this concept.\n\nHere is your full curriculum:\n{roadmap_md}\n\nShall we start?"
         else:
             # Fallback (Graph empty or topic unknown) -> Use LLM
-            roadmap_md, steps = generate_subtopics_python(topic)
-            session.subtopics = steps
             roadmap_msg = f"{roadmap_md}\n\n**Shall we proceed with this roadmap?**"
              
         session.current_index = -1 
@@ -497,7 +547,7 @@ def handle_persistent_chat(user, message):
     # Pass the last question asked by the bot (if any) for better context
     last_bot_question = getattr(session, "last_question", None)
     
-    analysis = analyze_input(message, session.current_topic, current_sub, last_bot_question=last_bot_question)
+    analysis = analyze_input(user, message, session.current_topic, current_sub, last_bot_question=last_bot_question)
     if not analysis:
         return {"reply": "I didn't catch that. Could you repeat?", "awaiting_reply": True, "is_complete": False}
         
@@ -530,10 +580,12 @@ def handle_persistent_chat(user, message):
         teaching_data = teach_content(next_sub) 
         content = teaching_data.get("content", "")
         visualization = teaching_data.get("visualization")
+        coding_task = teaching_data.get("coding_task")
         
         return {
             "reply": f"Skipping ahead!\n\n{content}", 
             "visualization": visualization,
+            "coding_task": coding_task,
             "awaiting_reply": True, 
             "is_complete": False
         }
@@ -543,6 +595,7 @@ def handle_persistent_chat(user, message):
     # --------------------------------------------------------------------------------------
     
     if intent == "ANSWER":
+        is_correct = analysis.get("is_correct", False)
         # 1. Update Graph Knowledge Tracing (GKT) Model (GNN)
         if is_correct:
             # 1. Update Graph Knowledge Tracing (GKT) Model (GNN)
@@ -589,6 +642,11 @@ def handle_persistent_chat(user, message):
             # --- METRICS UPDATE ---
             session.tutor_questions_asked = (session.tutor_questions_asked or 0) + 1
             # Do NOT increment correct
+            
+            # RECORD MISTAKE
+            from .mistake_service import mistake_service
+            mistake_service.record_mistake(user.email, current_sub, analysis.get('analysis', 'Incorrect answer explanation'), "tutor")
+
             session.save()
             # ----------------------
 
