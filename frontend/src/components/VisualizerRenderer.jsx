@@ -27,11 +27,12 @@ const VisualizerRenderer = ({ htmlContent, onRegenerate, isRegenerating }) => {
     return (
         <div className="w-full h-full bg-slate-50 dark:bg-slate-900 overflow-hidden relative">
             <iframe
+                key={htmlContent.length + htmlContent.slice(0, 50)} // Force re-mount on content change
                 ref={iframeRef}
                 title="Visualizer"
                 className="w-full h-full border-none"
                 srcDoc={htmlContent}
-                sandbox="allow-scripts allow-same-origin" // allow interaction
+                sandbox="allow-scripts allow-forms allow-modals allow-same-origin" 
             />
             {/* Regenerate Button */}
             {onRegenerate && (

@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { sendMessage, getTutorWelcome } from "../services/chatService";
 import VisualizerRenderer from './VisualizerRenderer';
+import PairCodingPanel from './PairCodingPanel';
 
 const DJANGO_BASE_URL = "http://127.0.0.1:8000/api";
 
@@ -67,7 +68,7 @@ const MarkdownComponents = {
     h3: ({ node, ...props }) => <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-200 mt-4 mb-2" {...props} />,
 
     // Text
-    p: ({ node, ...props }) => <div className="text-slate-700 dark:text-slate-300 leading-7 mb-4 last:mb-0" {...props} />,
+    p: ({ node, ...props }) => <div className="text-slate-700 dark:text-slate-300 leading-7 mb-4 last:mb-0 whitespace-pre-wrap" {...props} />,
     strong: ({ node, ...props }) => <strong className="font-bold text-slate-900 dark:text-white" {...props} />,
     em: ({ node, ...props }) => <em className="italic text-slate-600 dark:text-slate-400" {...props} />,
 
@@ -409,7 +410,7 @@ const NotesPanel = ({ messages }) => {
 };
 
 // ─────────────── CHAT AREA ───────────────
-const ChatArea = ({ messages, setMessages, setVisualizationContent, setActiveTab, setAutoStartQuiz }) => {
+const ChatArea = ({ messages, setMessages, setVisualizationContent, setActiveTab, setAutoStartQuiz, setCodingTask }) => {
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const chatEndRef = useRef(null);
@@ -432,6 +433,15 @@ const ChatArea = ({ messages, setMessages, setVisualizationContent, setActiveTab
                 setVisualizationContent(data.visualization);
                 setActiveTab("visualizer");
             }
+            
+            // 1.5 Handle Coding Task
+            if (data.coding_task) {
+                if (typeof setCodingTask === "function") {
+                    setCodingTask(data.coding_task);
+                }
+                setActiveTab("practice");
+            }
+
 
             // 2. Handle Completion (Agent Flow) -- CUSTOM AGENT HANDLER
             if (data.is_complete) {
@@ -551,6 +561,7 @@ const Sidebar = ({ activeTab, setActiveTab, darkMode, toggleTheme }) => {
     const tabs = [
         { id: "concepts", label: "Concepts", icon: BookOpen },
         { id: "visualizer", label: "Visualizer", icon: Eye },
+        { id: "practice", label: "Practice", icon: MonitorPlay },
         { id: "quiz", label: "Quiz", icon: BrainCircuit },
         { id: "notes", label: "Notes", icon: FileText },
     ];
@@ -604,11 +615,23 @@ export default function AgentTutor() {
 
 
     const [activeTab, setActiveTab] = useState("concepts");
-    const [messages, setMessages] = useState([]);
+    const [messages, setMessages] = useState(() => {
+        if (!topic) return [];
+        const saved = localStorage.getItem(`tutor_chat_${topic}`);
+        return saved ? JSON.parse(saved) : [];
+    });
     const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
     const [visualizationContent, setVisualizationContent] = useState(null);
+    const [codingTask, setCodingTask] = useState(null);
     const [isRegenerating, setIsRegenerating] = useState(false);
     const [autoStartQuiz, setAutoStartQuiz] = useState(false);
+
+    // PERSIST CHAT
+    useEffect(() => {
+        if (topic && messages.length > 0) {
+            localStorage.setItem(`tutor_chat_${topic}`, JSON.stringify(messages));
+        }
+    }, [messages, topic]);
 
     const handleRegenerate = async () => {
         setIsRegenerating(true);
@@ -627,7 +650,8 @@ export default function AgentTutor() {
 
     useEffect(() => {
         // If agent mode provided specific messages, verify/load them
-        if (initialMessage) {
+        // ONLY if we don't already have a history for this topic
+        if (initialMessage && messages.length === 0) {
             setMessages([{ sender: "bot", text: initialMessage }]);
         }
 
@@ -717,7 +741,7 @@ export default function AgentTutor() {
                     </div>
                 </header>
                 <div className="flex-1 overflow-hidden relative">
-                    <ChatArea messages={messages} setMessages={setMessages} setVisualizationContent={setVisualizationContent} setActiveTab={setActiveTab} setAutoStartQuiz={setAutoStartQuiz} />
+                    <ChatArea messages={messages} setMessages={setMessages} setVisualizationContent={setVisualizationContent} setActiveTab={setActiveTab} setAutoStartQuiz={setAutoStartQuiz} setCodingTask={setCodingTask} />
                 </div>
             </div>
 
@@ -726,8 +750,7 @@ export default function AgentTutor() {
                 <div className="flex-1 overflow-hidden">
                     {activeTab === "concepts" && <KeyConceptsPanel />}
                     {activeTab === "visualizer" && <VisualizerRenderer htmlContent={visualizationContent} onRegenerate={handleRegenerate} isRegenerating={isRegenerating} />}
-                    {activeTab === "concepts" && <KeyConceptsPanel />}
-                    {activeTab === "visualizer" && <VisualizerRenderer htmlContent={visualizationContent} onRegenerate={handleRegenerate} isRegenerating={isRegenerating} />}
+                    {activeTab === "practice" && <PairCodingPanel codingTask={codingTask} />}
                     {activeTab === "quiz" && <QuizPanel messages={messages} onQuizComplete={handleQuizComplete} autoStart={autoStartQuiz} />}
                     {activeTab === "notes" && <NotesPanel messages={messages} />}
                     {activeTab === "notes" && <NotesPanel messages={messages} />}

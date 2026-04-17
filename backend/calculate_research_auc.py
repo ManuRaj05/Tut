@@ -220,7 +220,14 @@ class RealMGKT:
         
         posterior = num / (den + 1e-9)
         self.node_states[node_idx, col] = posterior + (1 - posterior) * p_t
-        
+
+        # Minimal increase in mastery of dependent node with a weight
+        prop_weight = 0.05
+        for dep_idx in range(self.node_states.size(0)):
+            if dep_idx != node_idx and (self.adj[node_idx, dep_idx] > 0 or self.adj[dep_idx, node_idx] > 0):
+                increase = prop_weight * self.node_states[node_idx, col]
+                self.node_states[dep_idx, col] = torch.clamp(self.node_states[dep_idx, col] + increase, max=0.99)
+
         self._recompute_mastery()
         # Return probability of success for the NEXT step (or current mastery)
         # AUC usually compares prediction BEFORE event to outcome.

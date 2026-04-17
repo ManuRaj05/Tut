@@ -103,6 +103,7 @@ def tutor_chat(request):
             {
                 "reply": result.get("reply"),
                 "visualization": result.get("visualization"),
+                "coding_task": result.get("coding_task"),
                 "awaiting_reply": bool(result.get("awaiting_reply", False)),
                 "is_complete": bool(result.get("is_complete", False)),
                 "ended": bool(result.get("ended", False)),
@@ -168,12 +169,14 @@ def generate_quiz(request):
         Return them in JSON format like:
         [
           {{
-            "question": "...",
-            "options": ["A", "B", "C", "D"],
-            "answer": "A"
+            "question": "What is ...?",
+            "options": ["Option One", "Option Two", "Option Three", "Option Four"],
+            "answer": "Option Two"
           }},
           ...
         ]
+        
+        IMPORTANT: The 'answer' field MUST be the EXACT string text of one of the options. Do NOT use "A", "B", "C", "D" or indices.
         """
 
         # model = genai.GenerativeModel("gemini-2.0-flash")
@@ -184,6 +187,35 @@ def generate_quiz(request):
         import json, re
         json_match = re.search(r"\[.*\]", text, re.DOTALL)
         quiz_data = json.loads(json_match.group()) if json_match else []
+
+        # Sanitize Answers (Map A/B/C/D to full text if needed)
+        for q in quiz_data:
+            options = q.get("options", [])
+            answer = q.get("answer", "")
+            
+            # If answer is NOT in options, try to map it
+            if answer not in options:
+                # 1. Check if answer is an index (0-3)
+                if str(answer).isdigit():
+                    idx = int(answer)
+                    if 0 <= idx < len(options):
+                        q["answer"] = options[idx]
+                        continue
+
+                # 2. Check if answer is "A", "B", "C", "D"
+                # Map A->0, B->1, etc.
+                clean_ans = str(answer).strip().upper().replace(".", "")
+                if len(clean_ans) == 1 and 'A' <= clean_ans <= 'D':
+                    idx = ord(clean_ans) - ord('A')
+                    if 0 <= idx < len(options):
+                        q["answer"] = options[idx]
+                        continue
+                        
+                # 3. Fuzzy match / stripped match
+                for opt in options:
+                    if opt.strip().lower() == str(answer).strip().lower():
+                        q["answer"] = opt
+                        break
 
         return Response({"quiz": quiz_data}, status=status.HTTP_200_OK)
 
@@ -251,7 +283,7 @@ def get_graph_data(request):
         user_email = request.user.email
         
         # 1. Get State
-        mastery_vector = gkt._get_user_vector(user_email)
+        # The GKTModel uses stratified vectors, so we'll use get_mastery for the final score per concept
         concepts = gkt.concepts
         adj = gkt.adj_matrix
         
@@ -277,8 +309,15 @@ def get_graph_data(request):
         # Group by depth for X coordinates
         level_counts = {}
         
+        vectors = gkt._get_user_vectors(user_email)
+        
         for i, concept in enumerate(concepts):
-            mastery = float(mastery_vector[i])
+            mastery = gkt.get_mastery(user_email, concept)
+            
+            idx = gkt.concept_to_idx.get(concept, i)
+            understanding = vectors["tutor"][idx] if idx < len(vectors["tutor"]) else 0.0
+            application = vectors["code"][idx] if idx < len(vectors["code"]) else 0.0
+            reasoning = vectors["debug"][idx] if idx < len(vectors["debug"]) else 0.0
             
             d = depths[i]
             if d not in level_counts: level_counts[d] = 0
@@ -292,6 +331,9 @@ def get_graph_data(request):
                 "data": { 
                     "label": concept, 
                     "mastery": mastery,
+                    "understanding": understanding,
+                    "application": application,
+                    "reasoning": reasoning,
                     "status": "mastered" if mastery > 0.8 else "in-progress" if mastery > 0.1 else "locked"
                 },
                 "position": { "x": x_pos, "y": y_pos }

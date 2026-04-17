@@ -44,15 +44,15 @@ class BKTService:
             # Applying Phase (Heavy Weightage)
             # Success here implies strong application skills.
             params["p_guess"] = 0.05
-            params["p_slip"] = 0.10   # Lower slip than before
-            params["p_transit"] = 0.3 # High learning value (Application)
+            params["p_slip"] = 0.3   # Lower slip than before
+            params["p_transit"] = 0.5 # High learning value (Application)
             
         elif source_type == "debug":
             # Analysis Phase (Heavy Weightage)
             # Success here implies deep understanding/reasoning.
             params["p_guess"] = 0.01 
             params["p_slip"] = 0.05   # Very low slip (Hard to fake)
-            params["p_transit"] = 0.4 # Very high learning value (Analysis)
+            params["p_transit"] = 0.6 # Very high learning value (Analysis)
             
         elif source_type == "tutor":
             # Understanding Phase (Standard)

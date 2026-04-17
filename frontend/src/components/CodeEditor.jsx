@@ -6,8 +6,51 @@ export default function CodeEditor({ code = "", setCode, readOnly = false, class
   const [copied, setCopied] = useState(false);
   const editorRef = useRef(null);
 
-  const handleEditorDidMount = (editor) => {
+  const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
+
+    // Register Inline Completion Provider for AI Autocomplete
+    monaco.languages.registerInlineCompletionsProvider("python", {
+      provideInlineCompletions: async (model, position, context, token) => {
+        // Skip if no aiWorker attached by PairCodingPanel
+        if (!window.aiWorker) {
+          return { items: [] };
+        }
+
+        const textBeforeCursor = model.getValueInRange({
+          startLineNumber: 1,
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column
+        });
+
+        // Add a small delay/debounce if desired, but for now we query the worker
+        return new Promise((resolve) => {
+          const reqId = Math.random().toString(36).substring(7);
+
+          const handleMsg = (e) => {
+            if (e.data.id === reqId && (e.data.status === 'complete' || e.data.status === 'error')) {
+              window.aiWorker.removeEventListener("message", handleMsg);
+              
+              if (e.data.status === 'error' || !e.data.output) {
+                resolve({ items: [] });
+              } else {
+                resolve({
+                  items: [{
+                    insertText: e.data.output,
+                    range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column)
+                  }]
+                });
+              }
+            }
+          };
+
+          window.aiWorker.addEventListener("message", handleMsg);
+          window.aiWorker.postMessage({ id: reqId, text: textBeforeCursor });
+        });
+      },
+      freeInlineCompletions: () => {}
+    });
   };
 
   const handleCopy = async () => {

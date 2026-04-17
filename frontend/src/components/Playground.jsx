@@ -35,8 +35,8 @@ const Playground = () => {
       });
 
       const data = await res.json();
-      if (res.ok && data.code) {
-        setVisualizationCode(data.code);
+      if (res.ok && data.visualization) {
+        setVisualizationCode(data.visualization);
       } else {
         setError(data.error || 'Failed to generate visualization.');
       }

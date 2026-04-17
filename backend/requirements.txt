@@ -15,4 +15,4 @@ langchain-community==0.2.11
 langchain-groq==0.1.9
 groq
 langgraph
-# Force Rebuild 1
+duckduckgo-search

@@ -1,12 +1,12 @@
 from ..models import AgentSession
 from .tools import MainAgentTools
 import json
-from chatbot.services.persistent_tutor import handle_persistent_chat
 
 from .router_agent import RouterAgent
 from .planner_agent import PlannerAgent
 from .director_agent import DirectorAgent
 from .tutor_agent import TutorAgent
+from .research_agent import ResearchAgent
 
 class MainAgentOrchestrator:
     def __init__(self, user):
@@ -21,6 +21,7 @@ class MainAgentOrchestrator:
         self.planner = PlannerAgent()
         self.director = DirectorAgent()
         self.tutor = TutorAgent()
+        self.researcher = ResearchAgent()
 
     def process_message(self, message):
         """
@@ -42,6 +43,13 @@ class MainAgentOrchestrator:
         
         intent = self.router.route(message)
         print(f"Orchestrator Route: {intent}")
+
+        # 0. Scope Guardrail: If topic is irrelevant, politely decline.
+        if not intent.get("is_relevant", True):
+            topic = intent.get("topic") or "that topic"
+            reply = f"I'm currently specialized in **Python and Computer Science**. While I'd love to help, I don't have the specialized knowledge to teach you about **{topic}**. \n\nWould you like to learn something about Python, like Lists, Loops, or Recursion instead? 🐍"
+            self._save_bot_reply(reply)
+            return {"reply": reply, "action": None}
 
         # If user wants to start a NEW topic/plan, we interrupt the current one.
         if intent["route"] == "PLAN":
@@ -69,18 +77,25 @@ class MainAgentOrchestrator:
 
         # If we are currently in a plan, try to advance it or execute steps
         if self.session.current_plan:
-            # Check for SKIP intent
+            # 2a. Priority Interruptions (Technical Questions)
+            # If the user asks a technical question, we answer it even if a plan is active.
+            if intent["route"] == "QUESTION":
+                ans = self.researcher.handle(message, history_str)
+                reminder = f"\n\n--- MISSION REMINDER ---\nDon't forget: I prepared a specialized lesson on **{self.session.current_topic}** for you in the **Tutor Tab**! Let's continue there when you're ready."
+                reply = ans + reminder
+                self._save_bot_reply(reply)
+                return {"reply": reply, "action": None}
+
+            # 2b. Navigation / Skip intent
             skip_keywords = ["skip", "next", "pass", "move on"]
             if any(k in message.lower() for k in skip_keywords):
                  skipped_step = self.session.current_plan.pop(0)
                  self.session.save()
                  reply = f"Skipping {skipped_step.get('step')}... Moving to next."
                  self._save_bot_reply(reply)
-                 # Recursively call to execute the NEXT step immediately
-                 return self.process_message("NEXT_STEP_TRIGGER") # Internal trigger
+                 return self.process_message("NEXT_STEP_TRIGGER") 
 
-            # Check if the user's message is an "ACTION" that aligns with the current step?
-            # Or just blindly continue execution logic.
+            # 2c. Execute Plan Step
             return self._execute_plan_step(message, history_str)
 
         # If NO Plan, and NOT Planning -> Handle based on Route
@@ -103,9 +118,14 @@ class MainAgentOrchestrator:
             self._save_bot_reply(reply)
             return {"reply": reply, "action": action_payload}
 
+        elif intent["route"] == "QUESTION":
+            reply = self.researcher.handle(message, history_str)
+            self._save_bot_reply(reply)
+            return {"reply": reply, "action": None}
+
         else: # CHAT / DEFAULT
             # Just talk
-            reply = self.tutor.handle(message, history_str)
+            reply = self.tutor.handle(message, history_str, user_email=self.user.email)
             self._save_bot_reply(reply)
             return {"reply": reply, "action": None}
 
@@ -138,50 +158,33 @@ class MainAgentOrchestrator:
 
         # --- STEP DISPATCHER ---
         
-        # 1. PREREQUISITE TEACHING (Persistent Logic)
+        # 1. PREREQUISITE TEACHING (Main Agent Internal)
         if step_type == "teach_prereqs":
-            # ... (Keep existing complex logic for persistent tutor if valid) ...
-            # For simplicity in this refactor, let's delegate to TutorAgent but tracking state is hard.
-            # Let's keep using handle_persistent_chat as it manages its own state well.
-            started = current_step.get("started", False)
-            if not started:
-                     current_step["started"] = True
-                     self.session.current_plan[0] = current_step
-                     self.session.save()
-            
-            tutor_res = handle_persistent_chat(self.user, message)
-            reply = tutor_res.get("reply")
-            if tutor_res.get("is_complete"):
-                step_complete = True
+            # Use internal TutorAgent instead of persistent_tutor delegation
+            reply = self.tutor.handle(message, chat_history, topic=step_topic, subtopic="Prerequisites", user_email=self.user.email)
+            # For simplicity, we assume one interaction for prereqs in Main Agent
+            # If we want a full multi-turn here, we could add state, but user requested isolation.
+            step_complete = True
 
-        # 2. CHECK PREREQS -> Director (Quiz)
-        elif step_type == "check_prereqs":
-             action_payload = router_action_to_payload("SWITCH_TO_QUIZ", step_topic)
-             reply = f"Let's check your knowledge on {step_topic}."
-             action = action_payload
-             # FIX: Do NOT mark complete. Wait for report_success.
-             step_complete = False 
-
-        # 3. TEACH CONTENT -> Tutor Agent
+        # 2. TEACH CONTENT -> Hand off to Tutor Agent Tab
         elif step_type == "teach_content":
-             # FIX: Use Persistent Tutor Protocol (Strong Teaching)
-             from chatbot.services.persistent_tutor import handle_persistent_chat, start_new_topic
+             # We no longer execute teaching inside the Main Agent CenterPanel.
+             # Instead, we perform a clean "Handoff" to the dedicated Tutor Tab.
+             from chatbot.services.persistent_tutor import start_new_topic
              
              started = current_step.get("started", False)
              if not started:
-                 # Initial Handoff - FORCE RESET SESSION
                  current_step["started"] = True
                  self.session.current_plan[0] = current_step
                  self.session.save()
                  
-                 # Force start the topic in SQL DB
+                 # Initialize the topic in the SQL Database for the other tab
                  is_rev = current_step.get("mode") == "revision"
                  start_res = start_new_topic(self.user, step_topic, is_revision=is_rev)
                  roadmap_reply = start_res.get("reply")
                  
-                 reply = f"I'm pointing you to the Tutor for **{step_topic}**."
+                 reply = f"I've prepared a specialized study roadmap for **{step_topic}**. I'm switching you to the **Tutor Tab** now to begin the lesson!"
                  
-                 # Pass the roadmap to the frontend so it displays immediately
                  action = {
                      "type": "SWITCH_TAB", 
                      "view": "tutor", 
@@ -192,12 +195,9 @@ class MainAgentOrchestrator:
                  }
                  step_complete = False
              else:
-                 # Continued interaction if not switched? 
-                 # Usually users are in Tutor Tab now. If they msg here, we relay.
-                 tutor_res = handle_persistent_chat(self.user, message)
-                 reply = tutor_res.get("reply")
-                 if tutor_res.get("is_complete"):
-                     step_complete = True
+                 # If the user is somehow still here, just move to the next thing or prompt them
+                 reply = f"I'm ready for you in the **Tutor Tab** to master **{step_topic}**! \n\nIf you have a specific question about it, feel free to ask here, otherwise go ahead and switch tabs to continue the theory! 🚀"
+                 step_complete = False
 
         # 4. PRACTICE -> Director
         elif step_type == "practice_code":

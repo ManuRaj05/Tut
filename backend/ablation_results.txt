@@ -1,25 +1,33 @@
-                             ABLATION STUDY REPORT                              
-================================================================================
-
-Model: Full MGKT
-  Propagation (Neighbor): 0.130
-  Resolution (Final):     0.252
-
-Model: No-Graph
-  Propagation (Neighbor): 0.100
-  Resolution (Final):     0.252
-
-Model: No-Weights
-  Propagation (Neighbor): 0.140
-  Resolution (Final):     0.256
-
-Model: No-Prereqs
-  Propagation (Neighbor): 0.130
-  Resolution (Final):     0.252
 
 ================================================================================
-Key Findings:
-1. Full MGKT: Balanced propagation and high resolution of mixed signals.
-2. No-Graph:  Zero propagation (Neighbor stayed 0.100). Fails Cold Start.
-3. No-Weights: Lower final score because it didn't value the Debug success enough.
-4. No-Prereqs: Artificially high neighbor score (0.5) = dangerous assumption.
+                    PUBLICATION-LEVEL ABLATION STUDY RESULTS                    
+================================================================================
+Variant              | Mean Propagation     | Mean AUC (Overall)  
+-----------------------------------------------------------------
+Full MGKT            | 0.0033               | 0.6280              
+No-Graph             | 0.0033               | 0.6280              
+No-Weights           | 0.0033               | 0.6412              
+No-Prereqs           | 0.0033               | 0.6280              
+
+================================================================================
+                           AUC BREAKDOWN PER PROFILE                            
+================================================================================
+Learner Profile      | Variant              | AUC Score      
+-----------------------------------------------------------------
+Steady               | Full MGKT            | 0.5866
+Steady               | No-Graph             | 0.5866
+Steady               | No-Weights           | 0.6001
+Steady               | No-Prereqs           | 0.5866
+Expert               | Full MGKT            | 0.5399
+Expert               | No-Graph             | 0.5399
+Expert               | No-Weights           | 0.5587
+Expert               | No-Prereqs           | 0.5399
+Struggler            | Full MGKT            | 0.5949
+Struggler            | No-Graph             | 0.5949
+Struggler            | No-Weights           | 0.6679
+Struggler            | No-Prereqs           | 0.5949
+Noisy                | Full MGKT            | 0.5545
+Noisy                | No-Graph             | 0.5545
+Noisy                | No-Weights           | 0.5738
+Noisy                | No-Prereqs           | 0.5545
+================================================================================

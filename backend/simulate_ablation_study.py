@@ -120,7 +120,7 @@ def run_ablation_study():
     final_text = "\n".join(output)
     print(final_text)
     
-    with open("backend/ablation_results.txt", "w") as f:
+    with open("ablation_results.txt", "w") as f:
         f.write(final_text)
 
 if __name__ == "__main__":

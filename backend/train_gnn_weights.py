@@ -11,7 +11,7 @@ import json
 
 # Ensure backend modules are available
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from simulate_auc_benchmark import generate_student_data, MockBKT
+# removed import simulate_auc_benchmark
 
 # --- 1. GAT LAYER DEFINITION ---
 class GATLayer(nn.Module):
@@ -94,8 +94,12 @@ def train():
     adj = get_knowledge_graph()
     
     # Data Generation
-    print("Generating synthetic student data...")
-    dataset = generate_student_data(n_students, n_steps)
+    print("Loading synthetic student data...")
+    dataset_path = os.path.join(os.path.dirname(__file__), "research_dataset.json")
+    with open(dataset_path, "r") as f:
+        full_data = json.load(f)
+    # Extract only the events history as expected by the lower loop
+    dataset = [student["events"] for student in full_data]
     
     # We simplify training by treating each node's mastery as a separate prediction task
     # In reality, MGKT predicts success probability of the next interaction.

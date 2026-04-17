@@ -13,21 +13,21 @@ class PlannerAgent:
         Style context: "{style}"
 
         Styles:
-        - "comprehensive": Standard 4-step flow (Gaps -> Teach -> Code -> Debug).
+        - "comprehensive": Standard 3-step flow (Theory -> Code -> Debug).
         - "concise": Teach Content -> Practice Code.
-        - "test_prep": Teach Content (Theory + Examples) ONLY. No coding/quiz. Quick revision.
+        - "test_prep": Teach Content (Theory + Examples) ONLY. No coding. Quick revision.
         - "practical_prep": Practice Code ONLY. One consolidated coding challenge.
-        action can be["Gaps" for check_prereqs,"tutor" for teach_content,"debugger" for debug_code,"code" for practice_code,"dashboard" for dashboard]
+        action can be["tutor" for teach_content,"debugger" for debug_code,"code" for practice_code,"dashboard" for dashboard]
         Return ONLY a JSON list of steps. No other text.
         
         Examples:
-        [Comprehensive] -> [{{"step": "check_prereqs", "topic": "{topic}", action="Gaps"}},{{"step": "teach_content", "topic": "{topic} Theory & Examples", action="tutor"}}, {{"step": "practice_code", "topic": "{topic} Challenge", action="code"}}, {{"step": "practice_debug", "topic": "{topic} Debugging", action="debugger"}}]
+        [Comprehensive] -> [{{"step": "teach_content", "topic": "{topic} Theory & Examples", action="tutor"}}, {{"step": "practice_code", "topic": "{topic} Challenge", action="code"}}, {{"step": "practice_debug", "topic": "{topic} Debugging", action="debugger"}}]
         [Test Prep] -> [{{"step": "teach_content", "topic": "{topic} Theory & Examples", action="tutor"}}]
         [Practical] -> [{{"step": "practice_code", "topic": "{topic} Challenge", action="code"}}]
         
         Format:
         [
-            {{"step": "check_prereqs", "topic": "...",action="..."}},
+            {{"step": "teach_content", "topic": "...",action="..."}},
             ...
         ]
         """

@@ -20,25 +20,18 @@ class RouterAgent:
             "topic": "extracted topic or None"
         }
         """
-        # 0. Fast Path: Vector Search
-        vector_result = self.vector_router.route(message)
-        if vector_result:
-            intent = vector_result["route"]
-            # Short-circuit for CHAT or Simple Commands (where topic is likely implied)
-            # If message is long, we might miss a topic change, so use LLM.
-            # Heuristic: Short message (< 5 words) + Vector Hit = Safe to short-circuit.
-            if len(message.split()) < 5:
-                print(f"[Router] Fast Path Triggered: {intent}")
-                return {"route": intent, "topic": None, "style": "comprehensive"}
+        # Fast Path: (Removed to ensure high-precision topic extraction for all messages)
+        pass
         
         prompt = f"""
         You are the Router for an AI Tutor.
         Classify the User Message into one of these intents:
 
-        1. PLAN: Choose this if the user wants to LEARN a topic, START a lesson, or mentions a specific subject (e.g. "Teach me X", "I want to learn Y", "Start Z", "Let's do BFS").
-        2. ACTION: Choose this ONLY if the user explicitly asks for a tool (e.g. "Give me a quiz", "I want to code", "Practice", "Debug").
-        3. CHAT: Choose this for Greetings ("Hi", "Hello") or specific questions ("What is a variable?", "Why is sky blue?"). 
-           **CRITICAL**: If the user mentions a broad topic like "Recursion" or "Machine Learning" without a specific question, assume they want a PLAN to learn it.
+        1. PLAN: User wants to LEARN a new topic from scratch, START a formal lesson, or mentions "teach me" without a specific technical query (e.g. "I want to learn Python", "Start BFS lesson").
+        2. ACTION: User explicitly asks for a tool (e.g. "Give me a quiz", "I want to code", "Practice", "Debug").
+        3. QUESTION: User asks a technical "What is...", "How does...", "Explain..." or requests notes/definitions (e.g. "What is indexing?", "How do loops work?"). 
+           **CRITICAL**: If there's any technical substance or inquiry about a concept, choose QUESTION.
+        4. CHAT: Short, non-technical interactions ONLY. Greetings ("Hi"), simple affirmations ("Yes", "Ok"), or casual feedback ("That was great").
 
         Also detect the LEARNING STYLE:
         - "comprehensive" (default): Standard deep dive.
@@ -50,10 +43,15 @@ class RouterAgent:
 
         Return strictly JSON:
         {{
-            "route": "PLAN" | "ACTION" | "CHAT",
+            "route": "PLAN" | "ACTION" | "QUESTION" | "CHAT",
             "topic": "The extracted technical topic (e.g. 'Recursion') or null if none found",
-            "style": "comprehensive" | "concise" | "test_prep" | "practical_prep"
+            "style": "comprehensive" | "concise" | "test_prep" | "practical_prep",
+            "is_relevant": true | false
         }}
+
+        **RELEVANCY CRITERIA**:
+        - `is_relevant: true`: If the message is about Python, Programming, Computer Science, Algorithms, Data Structures, or standard Greetings/affirmations.
+        - `is_relevant: false`: If the message is about unrelated hobbies (cooking, sports, fashion), politics, general trivia not related to tech, or non-CS academic subjects.
         """
         
         try:

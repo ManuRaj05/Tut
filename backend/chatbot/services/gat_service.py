@@ -98,11 +98,8 @@ class GATService:
         
         prereq_val = H[updated_node_idx]
         
+        prop_weight = 0.05 # Minimal increase weight
         for dep in dependents:
-            # Calculate Attention Score
-            # e_ij = LeakyReLU(a * (W[dep] + W[src])) ?
-            # Let's just use dot product similarity of embeddings as attention
-            
             # Using W as embeddings
             h_src = self.W[updated_node_idx] if self.W.ndim > 1 else np.array([self.W[updated_node_idx]])
             h_dst = self.W[dep] if self.W.ndim > 1 else np.array([self.W[dep]])
@@ -111,8 +108,7 @@ class GATService:
             score = np.dot(h_src, h_dst) 
             score = max(0.01, score) # ReLU
             
-            # Update
-            # Next Mastery = Curr + LearningRate * Attention * PrereqMastery
-            H[dep] = min(H[dep] + (0.1 * score * prereq_val), 0.99)
+            # Update: minimal increase in dependent node
+            H[dep] = min(H[dep] + (prop_weight * score * prereq_val), 0.99)
             
         return H

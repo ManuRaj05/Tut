@@ -1,0 +1,22 @@
+================================================================================
+          PYKT BENCHMARK WITH BUILT-IN MODELS / MGKT IMPROVEMENT          
+================================================================================
+Learner Profile      | Model           | AUC Score  | Samples   
+-----------------------------------------------------------------
+Expert               | BKT             | N/A        | 177       
+Expert               | DKT_pykt        | N/A        | 177       
+Expert               | GKT_pykt        | N/A        | 177       
+Expert               | MGKT            | N/A        | 177       
+Noisy                | BKT             | 0.4256     | 161       
+Noisy                | DKT_pykt        | 0.4750     | 161       
+Noisy                | GKT_pykt        | 0.5000     | 161       
+Noisy                | MGKT            | 0.5614     | 161       
+Steady               | BKT             | 0.3579     | 230       
+Steady               | DKT_pykt        | 0.7945     | 230       
+Steady               | GKT_pykt        | 0.5000     | 230       
+Steady               | MGKT            | 0.3331     | 230       
+Struggler            | BKT             | 0.9638     | 146       
+Struggler            | DKT_pykt        | 0.3622     | 146       
+Struggler            | GKT_pykt        | 0.5000     | 146       
+Struggler            | MGKT            | 0.9281     | 146       
+================================================================================

@@ -69,12 +69,11 @@ class ContextAwareMGKT(RealMGKTWrapper):
         self.p_l = likelihood + (1 - likelihood) * self.p_t
         self.mastery = self.p_l
 
-        # 4. Graph Propagation (Copied from RealMGKTWrapper)
+        # 4. Graph Propagation
         if is_correct:
-            strength = 0.5 if signal_type == "debug" else 0.2
-            gain = (self.mastery - self.neighbor_mastery) * strength
-            if gain > 0:
-                self.neighbor_mastery += gain
+            prop_weight = 0.05
+            increase = prop_weight * self.mastery
+            self.neighbor_mastery = min(self.neighbor_mastery + increase, 0.99)
 
 def run_advanced_simulation():
     print(f"\n{'='*80}")

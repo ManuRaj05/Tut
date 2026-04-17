@@ -46,10 +46,9 @@ class RealMGKTWrapper(RealBKT):
         
         # 3. Graph Propagation
         if is_correct:
-            strength = 0.5 if signal_type == "debug" else 0.2
-            gain = (self.mastery - self.neighbor_mastery) * strength
-            if gain > 0:
-                self.neighbor_mastery += gain
+            prop_weight = 0.05
+            increase = prop_weight * self.mastery
+            self.neighbor_mastery = min(self.neighbor_mastery + increase, 0.99)
 
 # --- 2. Scenario Generators ---
 def generate_student_sessions():

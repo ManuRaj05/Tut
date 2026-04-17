@@ -5,6 +5,27 @@ import axios from "axios";
 import { useLocation, useSearchParams, useNavigate } from "react-router-dom";
 import VisualizerRenderer from "./VisualizerRenderer";
 
+function HiddenHint({ code }) {
+    const [revealed, setRevealed] = useState(false);
+    return (
+        <div className="my-2 p-3 bg-gray-800 rounded-lg border border-amber-500/30">
+            {revealed ? (
+                <pre className="text-xs text-amber-300 font-mono whitespace-pre-wrap">{code}</pre>
+            ) : (
+                <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-amber-500/70 font-mono mb-2">HIDDEN HINT (PASSWORD)</span>
+                    <button 
+                        onClick={() => setRevealed(true)}
+                        className="text-xs bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 px-4 py-1.5 rounded-full border border-amber-600/50 transition-all active:scale-95"
+                    >
+                        Reveal Step Code
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function AgentCode() {
     const [searchParams] = useSearchParams();
     const location = useLocation();
@@ -25,6 +46,13 @@ export default function AgentCode() {
     const [planDescription, setPlanDescription] = useState("");
     const [responseMode, setResponseMode] = useState(null);
     const assistantEndRef = useRef(null);
+
+    // Track which questions have been successfully passed locally
+    const [passedQuestions, setPassedQuestions] = useState(new Set());
+    
+    // GUIDED MODE STATE
+    const [currentStepIndex, setCurrentStepIndex] = useState(0);
+    const [isReviewing, setIsReviewing] = useState(false);
 
     // VISUALIZATION STATE
     const [isVisModalOpen, setIsVisModalOpen] = useState(false);
@@ -91,8 +119,8 @@ export default function AgentCode() {
             if (!token) throw new Error("User not authenticated");
 
             const res = await axios.post(
-                "http://localhost:8000/api/code/",
-                { query: "Create a coding challenge for: " + userInput, user_id: userData?.id }, // Force the query to be about the topic
+                "http://localhost:8000/api/code/generate-challenge/",
+                { topic: userInput },
                 {
                     headers: {
                         "Content-Type": "application/json",
@@ -130,6 +158,7 @@ export default function AgentCode() {
             setQuestions([]);
             setTestCases([]);
             setResponseMode(null);
+            setPassedQuestions(new Set());
         } finally {
             setLoading(false);
         }
@@ -273,54 +302,15 @@ results_json
             outputString = `📊 Result: ${passCount}/${results.length} Passed\n\n` + outputString;
 
             if (results.length > 0 && passCount === results.length) {
-                outputString += "\n🎉 ALL TESTS PASSED! REPORTING SUCCESS TO AGENT...\n";
+                outputString += "\n🎉 ALL TESTS PASSED! Click 'Submit Answer' or 'Finish Phase' when ready.\n";
                 setConsoleOutput(outputString);
 
-                try {
-                    const userData = JSON.parse(localStorage.getItem("user"));
-                    const token = userData?.access;
-
-                    // Call AGENT Success Report
-                    const aiUsageCount = assistantMessages.filter(msg => msg.role === 'user').length;
-
-                    const codeStats = {
-                        passed: true,
-                        total_tests: results.length,
-                        ai_usage: aiUsageCount,
-                        difficulty: currentQuestion.difficulty || "medium"
-                    };
-
-                    const successRes = await axios.post(
-                        "http://127.0.0.1:8000/api/main-agent/report_success/",
-                        {
-                            source: "code",
-                            code_stats: codeStats
-                        },
-                        { headers: { Authorization: `Bearer ${token}` } }
-                    );
-
-                    outputString += "\n🤖 AGENT SAYS:\n" + successRes.data.reply + "\n";
-
-                    if (successRes.data.action) {
-                        const action = successRes.data.action;
-                        outputString += `\n🚀 Auto-navigating to ${action.view}...`;
-                        setTimeout(() => {
-                            if (action.view === 'code') navigate(`/agent-code?topic=${encodeURIComponent(action.data?.topic)}`);
-                            if (action.view === 'debugger') navigate(`/agent-debugger?topic=${encodeURIComponent(action.data?.topic)}`);
-                            if (action.view === 'quiz') navigate(`/agent-quiz?topic=${encodeURIComponent(action.data?.topic)}`);
-                            if (action.view === 'tutor') navigate('/agent-tutor', { state: { initialMessage: successRes.data.reply } });
-                            if (action.view === 'dashboard') navigate('/');
-                        }, 2000);
-                        // Text Reply -> Go to Tutor
-                        outputString += `\n🚀 Auto-navigating to Tutor...`;
-                        setTimeout(() => {
-                            navigate('/agent-tutor', { state: { initialMessage: successRes.data.reply } });
-                        }, 2000);
-                    }
-                } catch (apiErr) {
-                    console.error(apiErr);
-                    outputString += "\n⚠️ Failed to report success to Agent.";
-                }
+                // Mark current question as passed
+                setPassedQuestions((prev) => {
+                    const newSet = new Set(prev);
+                    newSet.add(questions[currentIndex].id || currentIndex);
+                    return newSet;
+                });
             } else {
                 setConsoleOutput(outputString);
             }
@@ -330,15 +320,67 @@ results_json
         }
     };
 
-    const sendToAssistant = async (userPrompt) => {
-        const message = { role: "user", text: userPrompt, ts: Date.now() };
-        setAssistantMessages((prev) => [...prev, message]);
+    const onFinishPhase = async () => {
+        if (!window.confirm("Are you sure you want to finish the coding phase?")) return;
+
+        setConsoleOutput("🏁 Submitting final code results...");
+
+        try {
+            const userData = JSON.parse(localStorage.getItem("user"));
+            const token = userData?.access;
+
+            // Gather stats for all questions
+            const codeStatsArray = questions.map((q, idx) => {
+                const qId = q.id || idx;
+                const passed = passedQuestions.has(qId);
+                return {
+                    difficulty: q.difficulty || "medium",
+                    passed: passed,
+                    ai_usage: 0 // Could aggregate per question if tracked, ignoring for now
+                };
+            });
+
+            const successRes = await axios.post(
+                "http://127.0.0.1:8000/api/main-agent/report_success/",
+                {
+                    source: "code",
+                    code_stats: codeStatsArray // Assuming scoring engine can sum these
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            setConsoleOutput((prev) => prev + "\n🤖 AGENT SAYS:\n" + successRes.data.reply + "\n");
+
+            if (successRes.data.action) {
+                const action = successRes.data.action;
+                setConsoleOutput((prev) => prev + `\n🚀 Auto-navigating...`);
+                setTimeout(() => {
+                    if (action.view === 'code') navigate(`/agent-code?topic=${encodeURIComponent(action.data?.topic)}`);
+                    else if (action.view === 'debugger') navigate(`/agent-debugger?topic=${encodeURIComponent(action.data?.topic)}`);
+                    else if (action.view === 'quiz') navigate(`/agent-quiz?topic=${encodeURIComponent(action.data?.topic)}`);
+                    else if (action.view === 'dashboard') navigate('/');
+                    else navigate('/agent-tutor', { state: { initialMessage: successRes.data.reply } });
+                }, 2000);
+            } else {
+                setConsoleOutput((prev) => prev + `\n🚀 Auto-navigating to Tutor...`);
+                setTimeout(() => {
+                    navigate('/agent-tutor', { state: { initialMessage: successRes.data.reply } });
+                }, 2000);
+            }
+        } catch (apiErr) {
+            console.error(apiErr);
+            setConsoleOutput((prev) => prev + "\n⚠️ Failed to submit results.");
+        }
+    };
+
+    const sendToAssistant = async (userPrompt, extraData = {}) => {
+        const message = { role: "user", text: userPrompt || "Review current step", ts: Date.now() };
+        if (userPrompt) setAssistantMessages((prev) => [...prev, message]);
         setLoading(true);
 
         const userData = JSON.parse(localStorage.getItem("user"));
         const token = userData?.access;
 
-        // Prepare history
         const history = assistantMessages.map(msg => ({
             role: msg.role,
             content: msg.text
@@ -351,15 +393,37 @@ results_json
                     "Content-Type": "application/json",
                     "Authorization": `Bearer ${token}`
                 },
-                body: JSON.stringify({ prompt: userPrompt, code, model, history }),
+                body: JSON.stringify({ 
+                    prompt: userPrompt, 
+                    code, 
+                    model, 
+                    history,
+                    ...extraData 
+                }),
             });
             const data = await resp.json();
-            const botMsg = {
-                role: "assistant",
-                text: data.reply || "No reply from AI.",
-                ts: Date.now(),
-            };
-            setAssistantMessages((prev) => [...prev, botMsg]);
+            
+            if (extraData.mode === "review") {
+                const botMsg = {
+                    role: "assistant",
+                    text: data.passed 
+                        ? `✅ **Step ${currentStepIndex + 1} Verified!**\n\n${data.feedback}\n\n**Next Mission:** ${data.next_instruction}`
+                        : `❌ **Review Feedback:**\n\n${data.feedback}`,
+                    ts: Date.now(),
+                    isReview: true
+                };
+                setAssistantMessages((prev) => [...prev, botMsg]);
+                if (data.passed) {
+                    setCurrentStepIndex((prev) => prev + 1);
+                }
+            } else {
+                const botMsg = {
+                    role: "assistant",
+                    text: data.reply || "No reply from AI.",
+                    ts: Date.now(),
+                };
+                setAssistantMessages((prev) => [...prev, botMsg]);
+            }
         } catch (e) {
             setAssistantMessages((prev) => [
                 ...prev,
@@ -368,6 +432,17 @@ results_json
         } finally {
             setLoading(false);
         }
+    };
+
+    const onReviewStep = () => {
+        const q = questions[currentIndex];
+        if (!q.steps || currentStepIndex >= q.steps.length) return;
+        
+        const currentStep = q.steps[currentStepIndex];
+        sendToAssistant(null, {
+            mode: "review",
+            current_step: currentStep
+        });
     };
 
     const onSend = () => {
@@ -385,6 +460,20 @@ results_json
         if (questions.length > 0) {
             const q = questions[currentIndex];
             setTestCases(q.testcases || []);
+            setCurrentStepIndex(0);
+            
+            // Set initial instructions if in guided mode
+            if (q.steps && q.steps.length > 0) {
+                setAssistantMessages([
+                    {
+                        role: "assistant",
+                        text: `🚀 **Mission Started!**\n\nI will guide you through this challenge step-by-step.\n\n**Step 1:** ${q.steps[0].instruction}`,
+                        ts: Date.now()
+                    }
+                ]);
+            } else {
+                setAssistantMessages([]);
+            }
         }
     }, [currentIndex, questions]);
 
@@ -564,7 +653,14 @@ results_json
                             <p className="text-gray-500 italic">Waiting for Agent Assignment...</p>
                         ) : (
                             <>
-                                <h3 className="text-xl font-semibold text-white mb-3">{currentQuestion.title}</h3>
+                                <div className="flex justify-between items-start mb-3">
+                                    <h3 className="text-xl font-semibold text-white">{currentQuestion.title}</h3>
+                                    {passedQuestions.has(currentQuestion.id || currentIndex) && (
+                                        <span className="px-2 py-1 bg-green-900/50 text-green-400 text-xs font-bold rounded border border-green-700">
+                                            ✅ PASSED
+                                        </span>
+                                    )}
+                                </div>
                                 <div className="text-gray-300 whitespace-pre-wrap text-sm leading-relaxed">
                                     {currentQuestion.description?.trim() || (
                                         <span className="text-gray-500 italic">No description provided.</span>
@@ -600,7 +696,7 @@ results_json
                     >
                         <div className="flex justify-between items-center p-3 bg-gray-850 border-b border-gray-800">
                             <h3 className="font-medium text-indigo-300">🐍 Python Editor</h3>
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 items-center">
                                 <button
                                     onClick={fetchVisualization}
                                     className="bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-colors flex items-center gap-1"
@@ -608,16 +704,17 @@ results_json
                                     🎨 Visualize
                                 </button>
                                 <button
-                                    onClick={onSkip}
-                                    className="bg-yellow-600 hover:bg-yellow-700 px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-colors"
-                                >
-                                    ⏭️ Skip
-                                </button>
-                                <button
                                     onClick={onRun}
                                     className="bg-green-600 hover:bg-green-700 px-4 py-1.5 rounded-lg text-sm font-medium"
                                 >
                                     ▶ Run
+                                </button>
+                                <div className="w-px h-6 bg-gray-700 mx-1"></div>
+                                <button
+                                    onClick={onFinishPhase}
+                                    className="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 rounded-lg text-sm font-bold text-white shadow-[0_0_10px_rgba(37,99,235,0.4)]"
+                                >
+                                    Finish Phase
                                 </button>
                             </div>
                         </div>
@@ -675,41 +772,91 @@ results_json
                     >
                         <div className="p-3 bg-teal-800 text-white font-medium">🤖AI Assistant</div>
                         <div className="flex-1 overflow-auto p-3 space-y-3">
+                            {/* Mission Progress */}
+                            {currentQuestion.steps && currentQuestion.steps.length > 0 && (
+                                <div className="mb-4 p-3 bg-gray-800/50 rounded-lg border border-indigo-500/30">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Current Mission</span>
+                                        <span className="text-xs text-gray-400">{currentStepIndex + 1} / {currentQuestion.steps.length}</span>
+                                    </div>
+                                    <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                                        <div 
+                                            className="bg-indigo-500 h-full transition-all duration-500" 
+                                            style={{ width: `${((currentStepIndex) / currentQuestion.steps.length) * 100}%` }}
+                                        ></div>
+                                    </div>
+                                    <p className="mt-2 text-xs text-gray-300 italic">
+                                        {currentStepIndex < currentQuestion.steps.length 
+                                          ? `Target: ${currentQuestion.steps[currentStepIndex].title}`
+                                          : "✨ Mission Complete!"}
+                                    </p>
+                                </div>
+                            )}
+
                             {assistantMessages.length === 0 ? (
                                 <p className="text-gray-500 text-sm italic">Ask for help with your code!</p>
                             ) : (
                                 assistantMessages.map((msg, i) => (
                                     <div
                                         key={i}
-                                        className={`p - 3 rounded - lg max - w - [90 %] ${msg.role === "user"
+                                        className={`p-3 rounded-lg max-w-[95%] ${msg.role === "user"
                                             ? "bg-indigo-900/50 ml-auto border border-indigo-700"
                                             : "bg-teal-900/20 mr-auto border border-teal-800"
                                             } `}
                                     >
-                                        <div className="text-xs text-gray-400 mb-1">
-                                            {msg.role === "user" ? "You" : "AI"}
+                                        <div className="text-xs text-gray-400 mb-1 flex justify-between">
+                                            <span>{msg.role === "user" ? "You" : "AI Coach"}</span>
+                                            <span className="opacity-50 text-[10px]">
+                                                {new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
                                         </div>
-                                        <div className="text-sm text-gray-200 whitespace-pre-wrap">{msg.text}</div>
+                                        <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                                            {/* HANDLE HIDDEN HINTS (REVEAL) */}
+                                            {msg.text.split(/(\[REVEAL\].*?\[\/REVEAL\])/g).map((part, idx) => {
+                                                const match = part.match(/\[REVEAL\](.*?)\[\/REVEAL\]/);
+                                                if (match) {
+                                                    return <HiddenHint key={idx} code={match[1]} />;
+                                                }
+                                                return part;
+                                            })}
+                                        </div>
                                     </div>
                                 ))
                             )}
                             <div ref={assistantEndRef} className="h-0" />
                         </div>
-                        <div className="p-3 border-t border-gray-800">
-                            <textarea
-                                value={query}
-                                onChange={(e) => setQuery(e.target.value)}
-                                placeholder="Ask AI for hints or debugging help..."
-                                className="w-full p-2.5 bg-gray-850 border border-gray-700 rounded text-sm resize-none text-white"
-                                rows="2"
-                            />
-                            <button
-                                onClick={onSend}
-                                disabled={!query.trim() || loading}
-                                className="mt-2 w-full bg-teal-600 hover:bg-teal-700 py-2 rounded text-white text-sm font-medium disabled:opacity-60"
-                            >
-                                {loading ? "Thinking..." : "Send"}
-                            </button>
+                        <div className="p-3 border-t border-gray-800 bg-gray-900/50">
+                            {currentQuestion.steps && currentStepIndex < currentQuestion.steps.length && (
+                                <button
+                                    onClick={onReviewStep}
+                                    disabled={loading}
+                                    className="mb-2 w-full bg-indigo-600 hover:bg-indigo-700 py-2.5 rounded-lg text-white text-sm font-bold shadow-lg transition-transform active:scale-95 disabled:opacity-50"
+                                >
+                                    {loading ? "Analyzing Code..." : `Check Progress: Step ${currentStepIndex + 1}`}
+                                </button>
+                            )}
+                            <div className="flex gap-2">
+                                <textarea
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                    placeholder="Ask for a hint..."
+                                    className="flex-1 p-2 bg-gray-850 border border-gray-700 rounded-lg text-sm resize-none text-white focus:border-teal-500 focus:outline-none"
+                                    rows="1"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            onSend();
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={onSend}
+                                    disabled={!query.trim() || loading}
+                                    className="px-4 bg-teal-600 hover:bg-teal-700 rounded-lg text-white text-sm font-medium disabled:opacity-60"
+                                >
+                                    Send
+                                </button>
+                            </div>
                         </div>
                     </div>
 

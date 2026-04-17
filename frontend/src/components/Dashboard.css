@@ -9,20 +9,34 @@
 
 .dashboard-container {
     display: grid;
-    grid-template-columns: 250px 1fr 280px; /* Left | Center | Right */
-    grid-template-rows: 1fr;
-    height: 100vh; /* Full viewport height */
-    width: 100vw; /* Full viewport width */
+    grid-template-columns: 280px 1fr 320px;
+    grid-template-rows: 100%;
+    height: 100%;
+    width: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    align-items: start; /* Critical: Ensure panels are pinned to top */
     background-color: var(--bg-color);
     color: var(--text-color);
+    overflow: hidden;
 }
 
 /* General panel styling */
 .left-panel, .center-panel, .right-panel {
-    padding: 20px;
+    padding: 24px;
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
+    height: 100%;
+    max-height: 100%; 
+    min-height: 0; /* Prevent content from pushing beyond layout */
+    min-width: 0;
+    overflow-y: auto;
+}
+
+.center-panel {
+    overflow: hidden;
 }
 
 .right-panel {

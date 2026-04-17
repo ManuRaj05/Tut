@@ -1,112 +1,55 @@
-.center-panel {
-    /* Allow the chat window to grow and the input to stay at the bottom */
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    box-sizing: border-box; /* Important for flexbox height */
-}
+/* CenterPanel.css - Enhanced with custom animations and refined aesthetics */
 
-.chat-window {
-    flex-grow: 1; /* Takes up all available space */
-    overflow-y: auto; /* Enables scrolling for messages */
-    padding-right: 15px; /* Space for scrollbar */
-}
-
-.chat-message {
-    margin-bottom: 15px;
-    max-width: 80%;
-}
-
-.chat-message .message-content {
-    margin: 0;
-    padding: 12px;
-    border-radius: 10px;
-    display: inline-block;
-    white-space: pre-wrap; /* Preserve formatting */
-}
-
-/* Bot messages on the left */
-.chat-message.bot {
-    align-self: flex-start;
-}
-
-.chat-message.bot .message-content {
-    background-color: #333;
-}
-
-/* User messages on the right */
-.chat-message.user {
-    align-self: flex-end;
-    display: flex; /* These two lines push the message to the right */
-    justify-content: flex-end;
-}
-
-.chat-message.user .message-content {
-    background-color: var(--accent-color);
-    color: #111;
-}
-
-/* Typing Indicator */
-.typing-indicator {
-    padding: 12px;
-    background-color: #333;
-    border-radius: 10px;
-    display: inline-block;
-    min-width: 40px;
-}
-
-.typing-indicator span {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    background-color: #ccc;
-    border-radius: 50%;
-    animation: typing 1.4s infinite ease-in-out both;
-    margin: 0 2px;
-}
-
-.typing-indicator span:nth-child(1) {
-    animation-delay: -0.32s;
-}
-
-.typing-indicator span:nth-child(2) {
-    animation-delay: -0.16s;
-}
-
-@keyframes typing {
-    0%, 80%, 100% { 
-        transform: scale(0);
-    } 
-    40% { 
-        transform: scale(1); 
+/* Custom Animations */
+@keyframes message-in {
+    from {
+        opacity: 0;
+        transform: translateY(16px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
     }
 }
 
-.chat-input-form {
-    display: flex;
-    margin-top: 15px;
-    border-top: 1px solid var(--border-color);
-    padding-top: 15px;
+.animate-message-in {
+    animation: message-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.chat-input-form input {
-    flex-grow: 1;
-    padding: 12px;
-    background-color: #333;
-    border: 1px solid var(--border-color);
-    color: var(--text-color);
-    border-radius: 5px;
-    font-size: 1em;
+/* Modern Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
 }
 
-.chat-input-form button {
-    background-color: var(--accent-color);
-    color: #111;
-    border: none;
-    padding: 0 20px;
-    margin-left: 10px;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 1em;
-    font-weight: bold;
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
 }
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(79, 70, 229, 0.1);
+    border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(79, 70, 229, 0.3);
+}
+
+/* Glassmorphism & Prose refinement */
+.prose {
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.prose p {
+    margin-bottom: 1rem;
+}
+
+.prose ul, .prose ol {
+    margin-bottom: 1rem;
+}
+
+/* Ensure code blocks don't overflow their containers */
+pre {
+    max-width: 100%;
+    overflow-x: auto;
+}

@@ -3,6 +3,7 @@ import json
 import os
 from quizzes.services.neo4j_services import Neo4jService
 from .bkt_service import BKTService
+from .gat_service import GATService
 
 class GKTService:
     """
@@ -33,6 +34,8 @@ class GKTService:
         
         self.adj_matrix = self._build_adjacency_matrix()
         self.W_prop = 0.5 # Default propagation weight (can be loaded from trained model)
+        
+        self.gat = GATService(num_concepts=self.num_concepts)
 
     def _fetch_concepts(self):
         """Fetch all concepts from Neo4j to define the vector space."""
@@ -100,8 +103,12 @@ class GKTService:
         new_val = self.bkt.update_node(old_val, is_correct, source_type)
         vector[idx] = new_val
         
+        # 2. GAT Propagation (Neighbors)
+        vector = self.gat.propagate(np.array(vector), self.adj_matrix, idx).tolist()
+        new_val = vector[idx] # Base node's new val after potential side effects, though propagate shouldn't alter the base node itself here, being precise.
+        
         # Save State
-        self.user_states[user_email] = vector.tolist()
+        self.user_states[user_email] = vector
         self._save_json(self.state_file, self.user_states)
         
         print(f"[GKT] Updated {concept}: {old_val:.2f} -> {new_val:.2f}")

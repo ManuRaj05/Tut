@@ -75,8 +75,11 @@ def report_success(request):
         code_stats = request.data.get("code_stats")
         if code_stats:
             # Direct Code Report
-            # Engine expects a list of questions, so we wrap our single session stat
-            code_score = scorer.calculate_code_score([code_stats])
+            # Engine expects a list of questions, so we wrap our single session stat if needed
+            if isinstance(code_stats, list):
+                code_score = scorer.calculate_code_score(code_stats)
+            else:
+                code_score = scorer.calculate_code_score([code_stats])
             print(f"Code Report Received: {code_stats} -> Score: {code_score}")
         else:
             # Fallback estimation (e.g. if skipped or legacy call)
@@ -138,23 +141,30 @@ def report_success(request):
         if not session or not session.current_plan:
             current_topic = session.current_topic if session else "General"
             
-            # State Machine: Quiz -> Tutor -> Code -> Debug -> Dashboard
-            if source == "quiz":
-                reply_text = f"Diagnosis complete! Let's dive into the theory of **{current_topic}**."
-                action_view = "tutor"
-            elif source == "tutor":
+            # State Machine: Tutor -> Code -> Debug -> Dashboard
+            if source == "tutor":
                 reply_text = f"Theory on **{current_topic}** covered. Score: {tutor_score:.1f}. Time to write some code!"
                 action_view = "code"
             elif source == "code":
                 reply_text = f"Coding challenge passed! Score: {code_score}. Now let's fix a bug."
                 action_view = "debugger"
             elif source == "debug":
-                reply_text = f"Excellent! Final Weighted Score: **{final_score}**. Returning to dashboard."
-                action_view = "dashboard"
+                # Automatically fetch the next best topic after completing a node
+                from chatbot.services.recommendation_service import RecommendationService
+                rec_service = RecommendationService()
+                next_topic = rec_service.get_next_best_step(request.user.email, current_topic)
+                
+                if next_topic and next_topic != current_topic:
+                    reply_text = f"Excellent! Node Mastered! Final Score: **{final_score}**. Your next recommended topic is **{next_topic}**. Let's dive in!"
+                    action_view = "tutor"
+                    current_topic = next_topic
+                else:
+                    reply_text = f"Excellent! Final Weighted Score: **{final_score}**. You've mastered all available topics! Returning to dashboard."
+                    action_view = "dashboard"
             else:
+                # Default for any other source (including quiz if taken manually)
                 reply_text = f"Step completed. Continuing with **{current_topic}**."
-                action_view = "tutor" 
-
+                action_view = "tutor"
             result = {
                 "reply": reply_text,
                 "action": {
@@ -335,10 +345,13 @@ def welcome_message(request):
              data = {
                  "message": f"Hi {user.username}! 🧠 I've analyzed your Knowledge Graph.\n\nI strongly recommend we focus on: **{recommended_topic}**.\n\nShall we start?"
              }
+        
+        data["recommended_topic"] = recommended_topic
         return Response(data, status=status.HTTP_200_OK)
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({
-            "message": f"Hi {user.username}! Ready to learn **{recommended_topic}**?"
+            "message": f"Hi {user.username}! Ready to learn **{recommended_topic}**?",
+            "recommended_topic": recommended_topic
         }, status=status.HTTP_200_OK)
